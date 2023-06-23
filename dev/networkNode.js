@@ -1,40 +1,37 @@
 const express = require("express");
+const app = express();
 const bodyParser = require("body-parser");
 const Blockchain = require("./blockchain");
 const { v4: uuidv4 } = require("uuid");
+const port = process.argv[2];
 const rp = require("request-promise");
 
-const app = express();
-const hasucoin = new Blockchain();
 const nodeAddress = uuidv4().split("-").join("");
+
+const hasucoin = new Blockchain();
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
-//TODO: fetch entire blockchain
-app.get("/blockchain", (req, res) => {
+//*get entire blockchain
+app.get("/blockchain", function (req, res) {
   res.send(hasucoin);
 });
 
-//TODO: create new transaction
-app.post("/transaction", (req, res) => {
+//*create a new transaction
+app.post("/transaction", function (req, res) {
   const newTransaction = req.body;
-  const blockIndex = hasucoin.addTransactionToPendingTransactions({
-    ...newTransaction,
-    transactionId: nodeAddress,
-  });
-  res.status(200).json({
-    message: `Transaction will be added in block index ${blockIndex}`,
-  });
+  const blockIndex =
+    hasucoin.addTransactionToPendingTransactions(newTransaction);
+  res.json({ note: `Transaction will be added in block ${blockIndex}.` });
 });
 
-//TODO: create new transaction
-app.post("/transaction/broadcast", (req, res) => {
-  const { amount, sender, recipient } = req.body;
+//*broadcast transaction
+app.post("/transaction/broadcast", function (req, res) {
   const newTransaction = hasucoin.createNewTransaction(
-    amount,
-    sender,
-    recipient
+    req.body.amount,
+    req.body.sender,
+    req.body.recipient
   );
   hasucoin.addTransactionToPendingTransactions(newTransaction);
 
@@ -43,114 +40,111 @@ app.post("/transaction/broadcast", (req, res) => {
     const requestOptions = {
       uri: networkNodeUrl + "/transaction",
       method: "POST",
-      body: {
-        newTransaction,
-      },
+      body: newTransaction,
       json: true,
     };
+
     requestPromises.push(rp(requestOptions));
   });
 
-  Promise.all(requestPromises).then(() => {
-    res.status(200).json({
-      message: "Transaction created and broadcast successfully",
-    });
+  Promise.all(requestPromises).then((data) => {
+    res.json({ note: "Transaction created and broadcast successfully." });
   });
 });
 
-//TODO: mining new block
-app.get("/mine", (req, res) => {
+//*mine a block
+app.get("/mine", function (req, res) {
   const lastBlock = hasucoin.getLastBlock();
-  const prevHash = lastBlock.hash;
+  const previousBlockHash = lastBlock["hash"];
   const currentBlockData = {
-    index: lastBlock.index + 1,
-    transaction: hasucoin.pendingTransactions,
+    transactions: hasucoin.pendingTransactions,
+    index: lastBlock["index"] + 1,
   };
-  const nonce = hasucoin.proofOfWork(prevHash, currentBlockData);
-  const hash = hasucoin.generateHash(prevHash, currentBlockData, nonce);
-
-  // blockchain.createNewTransaction(12.5, "00", nodeAddress)
-  const newBlock = hasucoin.createNewBlock(nonce, prevHash, hash);
+  const nonce = hasucoin.proofOfWork(previousBlockHash, currentBlockData);
+  const blockHash = hasucoin.hashBlock(
+    previousBlockHash,
+    currentBlockData,
+    nonce
+  );
+  const newBlock = hasucoin.createNewBlock(nonce, previousBlockHash, blockHash);
 
   const requestPromises = [];
   hasucoin.networkNodes.forEach((networkNodeUrl) => {
     const requestOptions = {
       uri: networkNodeUrl + "/receive-new-block",
       method: "POST",
-      body: { newBlock },
+      body: { newBlock: newBlock },
       json: true,
     };
+
     requestPromises.push(rp(requestOptions));
   });
 
   Promise.all(requestPromises)
-    .then(() => {
+    .then((data) => {
       const requestOptions = {
         uri: hasucoin.currentNodeUrl + "/transaction/broadcast",
         method: "POST",
         body: {
-          amount: 19,
+          amount: 12.5,
           sender: "00",
           recipient: nodeAddress,
         },
         json: true,
       };
+
       return rp(requestOptions);
     })
-    .then(() => {
-      res.status(200).json({
-        message: "New block mined and broadcast successfully",
+    .then((data) => {
+      res.json({
+        note: "New block mined & broadcast successfully",
         block: newBlock,
       });
     });
 });
 
-app.post("/receive-new-block", (req, res) => {
-  const { newBlock } = req.body;
+//*receive new block
+app.post("/receive-new-block", function (req, res) {
+  const newBlock = req.body.newBlock;
   const lastBlock = hasucoin.getLastBlock();
-  const correctHash = lastBlock.hash === newBlock.prevHash;
-  const correctIndex = lastBlock.index + 1 === newBlock.index;
+  const correctHash = lastBlock.hash === newBlock.previousBlockHash;
+  const correctIndex = lastBlock["index"] + 1 === newBlock["index"];
 
   if (correctHash && correctIndex) {
     hasucoin.chain.push(newBlock);
     hasucoin.pendingTransactions = [];
-    res.status(200).json({
-      message: "New block receive and accepted",
-      newBlock,
+    res.json({
+      note: "New block received and accepted.",
+      newBlock: newBlock,
     });
   } else {
-    res.status(400).json({
-      message: "New block rejected",
-      newBlock,
+    res.json({
+      note: "New block rejected.",
+      newBlock: newBlock,
     });
   }
 });
-//TODO: register and broadcast it into the network
-app.post("/register-and-broadcast-node", (req, res) => {
-  const newNodeUrl = req.body.newNodeUrl;
-  const nodeNotAlreadyPresent =
-    hasucoin.networkNodes.indexOf(newNodeUrl) === -1;
 
-  if (nodeNotAlreadyPresent) {
+//*register a node and broadcast it the network
+app.post("/register-and-broadcast-node", function (req, res) {
+  const newNodeUrl = req.body.newNodeUrl;
+  if (hasucoin.networkNodes.indexOf(newNodeUrl) == -1)
     hasucoin.networkNodes.push(newNodeUrl);
-  }
 
   const regNodesPromises = [];
   hasucoin.networkNodes.forEach((networkNodeUrl) => {
-    //register-node
-
     const requestOptions = {
       uri: networkNodeUrl + "/register-node",
       method: "POST",
-      body: {
-        newNodeUrl,
-      },
+      body: { newNodeUrl: newNodeUrl },
       json: true,
     };
+
     regNodesPromises.push(rp(requestOptions));
   });
+
   Promise.all(regNodesPromises)
-    .then(() => {
+    .then((data) => {
       const bulkRegisterOptions = {
         uri: newNodeUrl + "/register-nodes-bulk",
         method: "POST",
@@ -159,45 +153,39 @@ app.post("/register-and-broadcast-node", (req, res) => {
         },
         json: true,
       };
+
       return rp(bulkRegisterOptions);
     })
-    .then(() => {
-      res.status(200).json({
-        message: "New node registered successfully with the network",
-      });
+    .then((data) => {
+      res.json({ note: "New node registered with network successfully." });
     });
 });
 
-//TODO: register a with the network
-app.post("/register-node", (req, res) => {
+//*register a node with the network
+app.post("/register-node", function (req, res) {
   const newNodeUrl = req.body.newNodeUrl;
-  const nodeNotAlreadyPresent =
-    hasucoin.networkNodes.indexOf(newNodeUrl) === -1;
+  const nodeNotAlreadyPresent = hasucoin.networkNodes.indexOf(newNodeUrl) == -1;
   const notCurrentNode = hasucoin.currentNodeUrl !== newNodeUrl;
-
   if (nodeNotAlreadyPresent && notCurrentNode)
     hasucoin.networkNodes.push(newNodeUrl);
-  res.status(200).json({
-    message: "New node registered successfully with node",
-  });
+  res.json({ note: "New node registered successfully." });
 });
 
-//TODO: register multiple nodes at once
-app.post("/register-nodes-bulk", (req, res) => {
+//*register multiple nodes at once
+app.post("/register-nodes-bulk", function (req, res) {
   const allNetworkNodes = req.body.allNetworkNodes;
   allNetworkNodes.forEach((networkNodeUrl) => {
     const nodeNotAlreadyPresent =
-      hasucoin.networkNodes.indexOf(networkNodeUrl) === -1;
+      hasucoin.networkNodes.indexOf(networkNodeUrl) == -1;
     const notCurrentNode = hasucoin.currentNodeUrl !== networkNodeUrl;
-
     if (nodeNotAlreadyPresent && notCurrentNode)
       hasucoin.networkNodes.push(networkNodeUrl);
   });
-  res.status(200).json({
-    message: "Bulk registered successfully",
-  });
+
+  res.json({ note: "Bulk registration successful." });
 });
 
+//*consensus
 app.get("/consensus", function (req, res) {
   const requestPromises = [];
   hasucoin.networkNodes.forEach((networkNodeUrl) => {
@@ -243,41 +231,41 @@ app.get("/consensus", function (req, res) {
   });
 });
 
-app.get("/block/:blockHash", (req, res) => {
-  const { blockHash } = req.params;
-  const block = hasucoin.getBlock(blockHash);
-  if (!block) {
-    res.status(200).json({
-      message: "Block not found",
-    });
-  }
-  res.status(200).json({
-    block,
+//*get block by blockHash
+app.get("/block/:blockHash", function (req, res) {
+  const blockHash = req.params.blockHash;
+  const correctBlock = hasucoin.getBlock(blockHash);
+  res.json({
+    block: correctBlock,
   });
 });
 
-app.get("/transactions/:transactionId", (req, res) => {
-  const { transactionId } = req.params;
-  const { transaction, block } = hasucoin.getTransaction(transactionId);
-  res.status(200).json({
-    transaction,
-    block,
+//*get transaction by transactionId
+app.get("/transaction/:transactionId", function (req, res) {
+  const transactionId = req.params.transactionId;
+  const trasactionData = hasucoin.getTransaction(transactionId);
+  res.json({
+    transaction: trasactionData.transaction,
+    block: trasactionData.block,
   });
 });
 
-app.get("/address/:address", (req, res) => {
-  const { address } = req.params;
-  const { addressTransactions, balance } = hasucoin.getAddressData(address);
-  res.status(200).json({
-    addressTransactions,
-    balance,
+//*get address by address
+app.get("/address/:address", function (req, res) {
+  const address = req.params.address;
+  const addressData = hasucoin.getAddressData(address);
+  res.json({
+    addressData: addressData,
   });
 });
 
-app.get("/block-explorer", (req, res) => {
+//*block explorer
+app.get("/block-explorer", function (req, res) {
   res.sendFile("./block-explorer/index.html", { root: __dirname });
 });
 
-//TODO: Start the server
-const PORT = process.argv[2] || 3000;
-app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
+app.listen(port, function () {
+  console.log(`Listening on port ${port}...`);
+});
+
+1;
